@@ -91,11 +91,29 @@ body.qfd-body {
    
 }
 
-.wb-nav__btn--active {
-    background: var(--bg);
-    color: var(--navy);
+/* Active item keeps the hover background; the gold edge marks it as current.
+   :focus/:active are listed so theme button styles can't repaint it. */
+.wb-nav .wb-nav__btn--active,
+.wb-nav .wb-nav__btn--active:hover,
+.wb-nav .wb-nav__btn--active:focus,
+.wb-nav .wb-nav__btn--active:active {
+    background: rgba(255,255,255,.1);
+    color: var(--white);
     border-left-color: var(--gold);
     font-weight: 600;
+    box-shadow: none;
+}
+
+.wb-nav .wb-nav__btn:focus,
+.wb-nav .wb-nav__btn:active {
+    background: rgba(255,255,255,.1);
+    color: var(--white);
+    box-shadow: none;
+}
+
+.wb-nav .wb-nav__btn:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: -2px;
 }
 
 .wb-sidebar__footer {
