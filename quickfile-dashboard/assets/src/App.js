@@ -10,7 +10,7 @@ import YearComparison from './components/YearComparison';
 import { FYContext } from './FYContext';
 import './styles/dashboard.css';
 
-const { fyYears = [], businessName = '' } = window.qfdData || {};
+const { fyYears = [], businessName = '', basePath = '/quickfile-dashboard/' } = window.qfdData || {};
 
 const VIEW_TITLES = {
     'dashboard':        __( 'Dashboard',           'quickfile-dashboard' ),
@@ -33,24 +33,43 @@ function ViewContent( { view } ) {
     }
 }
 
-function viewFromHash() {
-    const h = window.location.hash.slice( 1 );
-    return VIEW_TITLES[ h ] ? h : 'dashboard';
+// Views live at <basePath><view>, e.g. /quickfile-dashboard/monthly-summary.
+// The dashboard view is the base path itself.
+function pathForView( v ) {
+    return v === 'dashboard' ? basePath : basePath + v;
+}
+
+function viewFromLocation() {
+    // Legacy #view links still resolve.
+    const hash = window.location.hash.slice( 1 );
+    if ( VIEW_TITLES[ hash ] ) {
+        return hash;
+    }
+    const path = window.location.pathname;
+    const slug = path.startsWith( basePath )
+        ? path.slice( basePath.length ).replace( /\/+$/, '' )
+        : '';
+    return VIEW_TITLES[ slug ] ? slug : 'dashboard';
 }
 
 export default function App() {
-    const [ view,     setView     ] = useState( viewFromHash );
+    const [ view,     setView     ] = useState( viewFromLocation );
     const [ menuOpen, setMenuOpen ] = useState( false );
     const [ globalFY, setGlobalFY ] = useState( () => fyYears[ 0 ] ?? null );
 
     useEffect( () => {
-        const onHash = () => setView( viewFromHash() );
-        window.addEventListener( 'hashchange', onHash );
-        return () => window.removeEventListener( 'hashchange', onHash );
+        // Normalise the address bar (drops legacy hashes and unknown sub-paths).
+        window.history.replaceState( null, '', pathForView( viewFromLocation() ) + window.location.search );
+
+        const onPop = () => setView( viewFromLocation() );
+        window.addEventListener( 'popstate', onPop );
+        return () => window.removeEventListener( 'popstate', onPop );
     }, [] );
 
     const navigate = useCallback( ( v ) => {
-        window.location.hash = v;
+        if ( pathForView( v ) !== window.location.pathname ) {
+            window.history.pushState( null, '', pathForView( v ) + window.location.search );
+        }
         setView( v );
     }, [] );
 

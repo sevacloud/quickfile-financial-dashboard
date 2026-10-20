@@ -36,7 +36,9 @@ class QFD_Dashboard {
 
         if ( ! QFD_Roles::current_user_is_trustee() ) {
             $login_url = home_url( '/' . QFD_Login::SLUG . '/' );
-            $login_url = add_query_arg( 'redirect_to', rawurlencode( home_url( '/' . self::SLUG . '/' ) ), $login_url );
+            // Return to the requested view (e.g. /quickfile-dashboard/projects) after login.
+            $requested = home_url( (string) wp_parse_url( $_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH ) );
+            $login_url = add_query_arg( 'redirect_to', rawurlencode( $requested ), $login_url );
             wp_redirect( $login_url );
             exit;
         }
@@ -79,6 +81,7 @@ class QFD_Dashboard {
 
         wp_localize_script( 'qfd-dashboard', 'qfdData', [
             'restUrl'          => esc_url_raw( rest_url( 'quickfile/v1' ) ),
+            'basePath'         => trailingslashit( (string) wp_parse_url( home_url( '/' . self::SLUG . '/' ), PHP_URL_PATH ) ),
             'nonce'            => wp_create_nonce( 'wp_rest' ),
             'currentYear'      => (int) date( 'Y' ),
             'fyStart'          => $fy_years[0]['from'] ?? $this->current_fy_start(),
