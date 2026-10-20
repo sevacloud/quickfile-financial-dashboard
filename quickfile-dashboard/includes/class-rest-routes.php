@@ -94,7 +94,7 @@ class QFD_REST {
             ],
         ] );
 
-        // Project budgets — stored in wp_options, editable by trustees.
+        // Project budgets — stored in wp_options, editable by dashboard users.
         register_rest_route( self::NAMESPACE, '/project-budgets', [
             [
                 'methods'             => 'GET',

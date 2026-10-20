@@ -151,7 +151,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <div class="wb-lb">
         <div class="wb-lh">
             <h1><?php echo $business; ?></h1>
-            <p><?php esc_html_e( 'Trustee Dashboard', 'quickfile-dashboard' ); ?></p>
+            <p><?php esc_html_e( 'Finance Dashboard', 'quickfile-dashboard' ); ?></p>
         </div>
         <div class="wb-lb-body">
             <?php if ( $error !== '' ) : ?>
