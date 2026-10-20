@@ -30,11 +30,11 @@ class QFD_API {
     // How many times to retry a failed HTTP request before giving up.
     private const MAX_RETRIES = 1;
 
-    // Records requested per page on paginated list endpoints.
-    private const PAGE_SIZE = 200;
+    // Records requested per page on paginated list endpoints (QuickFile v2 max is 100).
+    private const PAGE_SIZE = 100;
 
     // Safety cap on pages fetched per list call (PAGE_SIZE × MAX_PAGES records).
-    private const MAX_PAGES = 25;
+    private const MAX_PAGES = 50;
 
     private QFD_Auth $auth;
     private int $cache_ttl;
