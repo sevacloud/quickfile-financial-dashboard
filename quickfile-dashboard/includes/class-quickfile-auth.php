@@ -2,60 +2,41 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Handles QuickFile API authentication.
+ * Handles QuickFile REST API authentication.
  *
- * Credentials are stored encrypted in wp_options via WordPress's
- * get_option/update_option — never hardcoded or exposed client-side.
+ * Uses a personal API token (QuickFile → Account Settings → Third Party
+ * Integration → API), sent as "Authorization: Bearer <token>".
+ * The token is stored encrypted in wp_options — never hardcoded or exposed client-side.
  */
 class QFD_Auth {
 
-    private string $account_number  = '';
-    private string $api_key         = '';
-    private string $application_id  = '';
+    private string $token = '';
 
     public function __construct() {
-        $this->account_number = (string) get_option( 'qfd_account_number', '' );
-        $this->api_key        = (string) $this->get_decrypted_api_key();
-        $this->application_id = (string) get_option( 'qfd_application_id', '' );
+        $this->token = $this->get_decrypted_token();
     }
 
-    /**
-     * Build the authentication node required by every QuickFile request.
-     */
-    public function get_auth_node( string $submission_number ): array {
-        $md5 = md5( $this->account_number . $this->api_key . $submission_number );
-
-        return [
-            'AccNumber'    => $this->account_number,
-            'MD5Value'     => strtolower( $md5 ),
-            'ApplicationID' => $this->application_id,
-        ];
-    }
-
-    /**
-     * Generate a unique submission number (epoch ms).
-     */
-    public function make_submission_number(): string {
-        return wp_generate_uuid4();
+    public function get_token(): string {
+        return $this->token;
     }
 
     public function is_configured(): bool {
-        return $this->account_number !== '' && $this->api_key !== '' && $this->application_id !== '';
+        return $this->token !== '';
     }
 
     // -----------------------------------------------------------------
     // Credential storage helpers (AES-256-CBC via openssl)
     // -----------------------------------------------------------------
 
-    public static function encrypt_api_key( string $plain ): string {
+    public static function encrypt_token( string $plain ): string {
         $key = self::derive_key();
         $iv  = openssl_random_pseudo_bytes( 16 );
         $enc = openssl_encrypt( $plain, 'AES-256-CBC', $key, 0, $iv );
         return base64_encode( $iv . '::' . $enc );
     }
 
-    private function get_decrypted_api_key(): string {
-        $stored = (string) get_option( 'qfd_api_key_enc', '' );
+    private function get_decrypted_token(): string {
+        $stored = (string) get_option( 'qfd_api_token_enc', '' );
         if ( $stored === '' ) {
             return '';
         }

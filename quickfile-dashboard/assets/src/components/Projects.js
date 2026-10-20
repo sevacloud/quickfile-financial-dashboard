@@ -28,7 +28,7 @@ const RAG_LABELS = {
 
 // ─── Inline budget editor ────────────────────────────────────────────────────
 
-function BudgetEditor( { tagId, budget, onSaved } ) {
+function BudgetEditor( { tag, budget, onSaved } ) {
     const [ editing,   setEditing   ] = useState( false );
     const [ inputVal,  setInputVal  ] = useState( String( budget ) );
     const [ saving,    setSaving    ] = useState( false );
@@ -45,8 +45,8 @@ function BudgetEditor( { tagId, budget, onSaved } ) {
         setSaving( true );
         setSaveError( null );
         try {
-            await api.saveProjectBudget( tagId, parsed );
-            onSaved( tagId, parsed );
+            await api.saveProjectBudget( tag, parsed );
+            onSaved( tag, parsed );
             setEditing( false );
         } catch ( e ) {
             setSaveError( e.message );
@@ -115,15 +115,71 @@ function BudgetEditor( { tagId, budget, onSaved } ) {
     );
 }
 
+// ─── Shared bits ──────────────────────────────────────────────────────────────
+
+const STAT_LABEL = { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 };
+const STAT_VALUE = { fontSize: '1.25rem', fontWeight: 700, color: 'var(--navy)' };
+
+function Stat( { label, value, colour } ) {
+    return (
+        <div>
+            <div style={ STAT_LABEL }>{ label }</div>
+            <div style={ { ...STAT_VALUE, color: colour ?? STAT_VALUE.color } }>{ value }</div>
+        </div>
+    );
+}
+
+function netColour( v ) {
+    return v >= 0 ? 'var(--rag-green)' : 'var(--rag-red)';
+}
+
+// Table of the documents behind an income or spend total.
+function DocumentTable( { rows, total, partyLabel, getKey, getNumber, getDate, getParty } ) {
+    return (
+        <div className="wb-table-wrap" style={ { marginTop: 12 } }>
+            <table className="wb-table">
+                <thead>
+                    <tr>
+                        <th>{ __( 'Number',      'quickfile-dashboard' ) }</th>
+                        <th>{ __( 'Date',        'quickfile-dashboard' ) }</th>
+                        <th>{ partyLabel }</th>
+                        <th>{ __( 'Description', 'quickfile-dashboard' ) }</th>
+                        <th>{ __( 'Amount',      'quickfile-dashboard' ) }</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    { rows.map( ( row, i ) => (
+                        <tr key={ getKey( row ) ?? i }>
+                            <td>{ getNumber( row ) || '—' }</td>
+                            <td>{ getDate( row ) || '—' }</td>
+                            <td>{ getParty( row ) || '—' }</td>
+                            <td>{ row.Description || '—' }</td>
+                            <td>{ fmt( row.GrossAmount ?? 0 ) }</td>
+                        </tr>
+                    ) ) }
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colSpan={ 4 }>{ __( 'Total', 'quickfile-dashboard' ) }</td>
+                        <td>{ fmt( total ) }</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    );
+}
+
 // ─── Project card ─────────────────────────────────────────────────────────────
 
 function ProjectCard( { project, budget, onBudgetSaved } ) {
-    const [ expanded, setExpanded ] = useState( false );
+    const [ expanded, setExpanded ] = useState( null ); // null | 'income' | 'spend'
 
-    const tagId    = project.tag?.TagID;
-    const name     = project.tag?.TagName     ?? __( 'Unknown Project', 'quickfile-dashboard' );
-    const desc     = project.tag?.Description ?? '';
-    const spend    = parseFloat( project.total ?? 0 );
+    const name      = project.tag || __( 'Unknown Project', 'quickfile-dashboard' );
+    const income    = parseFloat( project.income ?? 0 );
+    const spend     = parseFloat( project.spend  ?? 0 );
+    const net       = income - spend;
+    const invoices  = project.invoices  ?? [];
+    const purchases = project.purchases ?? [];
     const hasBudget = budget > 0;
     const remaining = hasBudget ? budget - spend : null;
     const pct       = hasBudget ? Math.min( ( spend / budget ) * 100, 100 ) : null;
@@ -131,18 +187,15 @@ function ProjectCard( { project, budget, onBudgetSaved } ) {
 
     const barColour = rag === 'red' ? 'var(--rag-red)' : rag === 'amber' ? 'var(--gold)' : 'var(--teal)';
 
+    const toggle = ( section ) => setExpanded( expanded === section ? null : section );
+
     return (
         <div className="wb-card" style={ { marginBottom: 16 } }>
 
             {/* ── Header ── */}
             <div style={ { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16 } }>
-                <div>
-                    <div className="wb-card__title" style={ { marginBottom: desc ? 4 : 0, paddingBottom: 0, border: 'none' } }>
-                        { name }
-                    </div>
-                    { desc && (
-                        <p style={ { fontSize: '.85rem', color: 'var(--muted)' } }>{ desc }</p>
-                    ) }
+                <div className="wb-card__title" style={ { marginBottom: 0, paddingBottom: 0, border: 'none' } }>
+                    { name }
                 </div>
                 { rag && (
                     <span className={ `wb-rag wb-rag--${ rag }` }>{ RAG_LABELS[ rag ] }</span>
@@ -152,36 +205,22 @@ function ProjectCard( { project, budget, onBudgetSaved } ) {
             {/* ── Stats row ── */}
             <div style={ { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16, marginBottom: pct !== null ? 14 : 0 } }>
 
-                <div>
-                    <div style={ { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 } }>
-                        { __( 'Budget', 'quickfile-dashboard' ) }
-                    </div>
-                    <BudgetEditor tagId={ tagId } budget={ budget } onSaved={ onBudgetSaved } />
-                </div>
+                <Stat label={ __( 'Income', 'quickfile-dashboard' ) } value={ fmt( income ) } colour="var(--rag-green)" />
+                <Stat label={ __( 'Spend',  'quickfile-dashboard' ) } value={ fmt( spend ) }  colour="var(--rag-red)" />
+                <Stat label={ __( 'Net',    'quickfile-dashboard' ) } value={ fmt( net ) }    colour={ netColour( net ) } />
 
                 <div>
-                    <div style={ { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 } }>
-                        { __( 'Total Spend', 'quickfile-dashboard' ) }
-                    </div>
-                    <div style={ { fontSize: '1.25rem', fontWeight: 700, color: 'var(--navy)' } }>
-                        { fmt( spend ) }
-                    </div>
+                    <div style={ STAT_LABEL }>{ __( 'Budget', 'quickfile-dashboard' ) }</div>
+                    <BudgetEditor tag={ project.tag } budget={ budget } onSaved={ onBudgetSaved } />
                 </div>
 
                 { hasBudget && (
-                    <div>
-                        <div style={ { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 } }>
-                            { __( 'Remaining', 'quickfile-dashboard' ) }
-                        </div>
-                        <div style={ { fontSize: '1.25rem', fontWeight: 700, color: remaining >= 0 ? 'var(--rag-green)' : 'var(--rag-red)' } }>
-                            { fmt( remaining ) }
-                        </div>
-                    </div>
+                    <Stat label={ __( 'Budget Remaining', 'quickfile-dashboard' ) } value={ fmt( remaining ) } colour={ netColour( remaining ) } />
                 ) }
 
                 { hasBudget && pct !== null && (
                     <div style={ { alignSelf: 'center' } }>
-                        <div style={ { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 } }>
+                        <div style={ { ...STAT_LABEL, marginBottom: 6 } }>
                             { __( 'Budget used', 'quickfile-dashboard' ) }
                         </div>
                         <div style={ { height: 10, background: 'var(--border)', borderRadius: 5, overflow: 'hidden' } }>
@@ -200,51 +239,58 @@ function ProjectCard( { project, budget, onBudgetSaved } ) {
                 ) }
             </div>
 
-            {/* ── Invoice accordion ── */}
-            { project.invoices?.length > 0 && (
-                <>
-                    <button
-                        className="wb-btn wb-btn--secondary"
-                        style={ { fontSize: '.8125rem', padding: '5px 14px', marginTop: 12 } }
-                        onClick={ () => setExpanded( ! expanded ) }
-                        aria-expanded={ expanded }
-                    >
-                        { expanded
-                            ? __( 'Hide Invoices', 'quickfile-dashboard' )
-                            : `${ __( 'Show', 'quickfile-dashboard' ) } ${ project.invoices.length } ${ __( 'invoice(s)', 'quickfile-dashboard' ) }` }
-                    </button>
-
-                    { expanded && (
-                        <div className="wb-table-wrap" style={ { marginTop: 12 } }>
-                            <table className="wb-table">
-                                <thead>
-                                    <tr>
-                                        <th>{ __( 'Invoice #',  'quickfile-dashboard' ) }</th>
-                                        <th>{ __( 'Date',       'quickfile-dashboard' ) }</th>
-                                        <th>{ __( 'Supplier',   'quickfile-dashboard' ) }</th>
-                                        <th>{ __( 'Amount',     'quickfile-dashboard' ) }</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    { project.invoices.map( ( inv, i ) => (
-                                        <tr key={ inv.InvoiceID ?? i }>
-                                            <td>{ inv.InvoiceNumber ?? inv.InvoiceID }</td>
-                                            <td>{ inv.InvoiceDate }</td>
-                                            <td>{ inv.SupplierName ?? inv.ClientName ?? '—' }</td>
-                                            <td>{ fmt( inv.TotalAmount ?? 0 ) }</td>
-                                        </tr>
-                                    ) ) }
-                                </tbody>
-                                <tfoot>
-                                    <tr>
-                                        <td colSpan={ 3 }>{ __( 'Total', 'quickfile-dashboard' ) }</td>
-                                        <td>{ fmt( spend ) }</td>
-                                    </tr>
-                                </tfoot>
-                            </table>
-                        </div>
+            {/* ── Document accordions ── */}
+            { ( invoices.length > 0 || purchases.length > 0 ) && (
+                <div style={ { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 } }>
+                    { invoices.length > 0 && (
+                        <button
+                            className="wb-btn wb-btn--secondary"
+                            style={ { fontSize: '.8125rem', padding: '5px 14px' } }
+                            onClick={ () => toggle( 'income' ) }
+                            aria-expanded={ expanded === 'income' }
+                        >
+                            { expanded === 'income'
+                                ? __( 'Hide Income', 'quickfile-dashboard' )
+                                : `${ __( 'Show', 'quickfile-dashboard' ) } ${ invoices.length } ${ __( 'sales invoice(s)', 'quickfile-dashboard' ) }` }
+                        </button>
                     ) }
-                </>
+                    { purchases.length > 0 && (
+                        <button
+                            className="wb-btn wb-btn--secondary"
+                            style={ { fontSize: '.8125rem', padding: '5px 14px' } }
+                            onClick={ () => toggle( 'spend' ) }
+                            aria-expanded={ expanded === 'spend' }
+                        >
+                            { expanded === 'spend'
+                                ? __( 'Hide Spend', 'quickfile-dashboard' )
+                                : `${ __( 'Show', 'quickfile-dashboard' ) } ${ purchases.length } ${ __( 'purchase(s)', 'quickfile-dashboard' ) }` }
+                        </button>
+                    ) }
+                </div>
+            ) }
+
+            { expanded === 'income' && (
+                <DocumentTable
+                    rows={ invoices }
+                    total={ income }
+                    partyLabel={ __( 'Client', 'quickfile-dashboard' ) }
+                    getKey={ ( r ) => r.InvoiceID }
+                    getNumber={ ( r ) => r.InvoiceNumber }
+                    getDate={ ( r ) => r.IssueDate }
+                    getParty={ ( r ) => r.ClientName }
+                />
+            ) }
+
+            { expanded === 'spend' && (
+                <DocumentTable
+                    rows={ purchases }
+                    total={ spend }
+                    partyLabel={ __( 'Supplier', 'quickfile-dashboard' ) }
+                    getKey={ ( r ) => r.PurchaseID }
+                    getNumber={ ( r ) => r.ReceiptNumber }
+                    getDate={ ( r ) => r.ReceiptDate }
+                    getParty={ ( r ) => r.SupplierName }
+                />
             ) }
         </div>
     );
@@ -253,50 +299,37 @@ function ProjectCard( { project, budget, onBudgetSaved } ) {
 // ─── Summary bar ─────────────────────────────────────────────────────────────
 
 function SummaryBar( { projects, budgets } ) {
-    const totalSpend  = projects.reduce( ( s, p ) => s + parseFloat( p.total ?? 0 ), 0 );
-    const totalBudget = projects.reduce( ( s, p ) => {
-        const b = budgets[ p.tag?.TagID ] ?? 0;
-        return s + b;
-    }, 0 );
-    const remaining = totalBudget > 0 ? totalBudget - totalSpend : null;
+    const totalIncome = projects.reduce( ( s, p ) => s + parseFloat( p.income ?? 0 ), 0 );
+    const totalSpend  = projects.reduce( ( s, p ) => s + parseFloat( p.spend  ?? 0 ), 0 );
+    const totalBudget = projects.reduce( ( s, p ) => s + ( budgets[ p.tag ] ?? 0 ), 0 );
+    const net         = totalIncome - totalSpend;
+
+    const label = { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em' };
+    const value = { fontSize: '1.75rem', fontWeight: 800, color: 'var(--navy)' };
 
     return (
         <div className="wb-card" style={ { marginBottom: 24 } }>
             <div style={ { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 20 } }>
                 <div>
-                    <div style={ { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em' } }>
-                        { __( 'Total Projects', 'quickfile-dashboard' ) }
-                    </div>
-                    <div style={ { fontSize: '1.75rem', fontWeight: 800, color: 'var(--navy)' } }>
-                        { projects.length }
-                    </div>
+                    <div style={ label }>{ __( 'Total Projects', 'quickfile-dashboard' ) }</div>
+                    <div style={ value }>{ projects.length }</div>
                 </div>
                 <div>
-                    <div style={ { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em' } }>
-                        { __( 'Total Budget', 'quickfile-dashboard' ) }
-                    </div>
-                    <div style={ { fontSize: '1.75rem', fontWeight: 800, color: 'var(--navy)' } }>
-                        { totalBudget > 0 ? fmt( totalBudget ) : '—' }
-                    </div>
+                    <div style={ label }>{ __( 'Total Income', 'quickfile-dashboard' ) }</div>
+                    <div style={ { ...value, color: 'var(--rag-green)' } }>{ fmt( totalIncome ) }</div>
                 </div>
                 <div>
-                    <div style={ { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em' } }>
-                        { __( 'Total Spend', 'quickfile-dashboard' ) }
-                    </div>
-                    <div style={ { fontSize: '1.75rem', fontWeight: 800, color: 'var(--navy)' } }>
-                        { fmt( totalSpend ) }
-                    </div>
+                    <div style={ label }>{ __( 'Total Spend', 'quickfile-dashboard' ) }</div>
+                    <div style={ { ...value, color: 'var(--rag-red)' } }>{ fmt( totalSpend ) }</div>
                 </div>
-                { remaining !== null && (
-                    <div>
-                        <div style={ { fontSize: '.75rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em' } }>
-                            { __( 'Remaining', 'quickfile-dashboard' ) }
-                        </div>
-                        <div style={ { fontSize: '1.75rem', fontWeight: 800, color: remaining >= 0 ? 'var(--rag-green)' : 'var(--rag-red)' } }>
-                            { fmt( remaining ) }
-                        </div>
-                    </div>
-                ) }
+                <div>
+                    <div style={ label }>{ __( 'Net', 'quickfile-dashboard' ) }</div>
+                    <div style={ { ...value, color: netColour( net ) } }>{ fmt( net ) }</div>
+                </div>
+                <div>
+                    <div style={ label }>{ __( 'Total Budget', 'quickfile-dashboard' ) }</div>
+                    <div style={ value }>{ totalBudget > 0 ? fmt( totalBudget ) : '—' }</div>
+                </div>
             </div>
         </div>
     );
@@ -324,8 +357,8 @@ export default function Projects() {
 
     useEffect( () => { fetchData( fyStart, fyEnd ); }, [] );
 
-    const handleBudgetSaved = useCallback( ( tagId, newBudget ) => {
-        setBudgets( ( prev ) => ( { ...prev, [ tagId ]: newBudget } ) );
+    const handleBudgetSaved = useCallback( ( tag, newBudget ) => {
+        setBudgets( ( prev ) => ( { ...prev, [ tag ]: newBudget } ) );
     }, [] );
 
     return (
@@ -340,9 +373,9 @@ export default function Projects() {
 
                     { projects.map( ( project, i ) => (
                         <ProjectCard
-                            key={ project.tag?.TagID ?? i }
+                            key={ project.tag ?? i }
                             project={ project }
-                            budget={ budgets[ project.tag?.TagID ] ?? 0 }
+                            budget={ budgets[ project.tag ] ?? 0 }
                             onBudgetSaved={ handleBudgetSaved }
                         />
                     ) ) }

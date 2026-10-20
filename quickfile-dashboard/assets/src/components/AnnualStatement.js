@@ -14,23 +14,8 @@ function parseFYStart( dateStr ) {
     return parseInt( ( dateStr ?? '' ).split( '-' )[ 0 ] ) || new Date().getFullYear();
 }
 
-const ACCOUNT_KEYS   = [ 'trust', 'chapel', 'natwest' ];
-const ACCOUNT_LABELS = {
-    trust:   __( 'Trust (HSBC)',          'quickfile-dashboard' ),
-    chapel:  __( 'Chapel House (Lloyds)', 'quickfile-dashboard' ),
-    natwest: __( 'Chapel Bank (Natwest)', 'quickfile-dashboard' ),
-};
-
 function fmt( v ) {
     return new Intl.NumberFormat( 'en-GB', { style: 'currency', currency: 'GBP' } ).format( v ?? 0 );
-}
-
-// Look up balance for a nominal code in one account's NominalAccount array.
-// Returns null when account data is unavailable (error or unsupported filter).
-function acctBalance( acctData, code ) {
-    if ( ! acctData || acctData._error || ! Array.isArray( acctData.NominalAccount ) ) return null;
-    const row = acctData.NominalAccount.find( ( n ) => n.NominalCode === code );
-    return row ? parseFloat( row.Balance ?? 0 ) : 0;
 }
 
 // ─── Inline prior-year cell (admin editable) ──────────────────────────────────────────────
@@ -128,20 +113,15 @@ function PriorYearCell( { fy, code, value, onSaved } ) {
 // ─── SOFA table ───────────────────────────────────────────────────────────────────────────────────
 
 function SoFATable( { data, priorYear, priorFY, currentFYLabel, priorFYLabel, onPriorYearSaved } ) {
+    // Combined figures only: the QuickFile v2 reports cannot be filtered by bank account.
     const combined  = data.combined?.NominalAccount ?? [];
-    const colCount  = 2 + ACCOUNT_KEYS.length + 2;
+    const colCount  = 4;
 
     const incomeRows = combined.filter( ( n ) => n.CategoryType === 'Income' );
     const expendRows = combined.filter( ( n ) => n.CategoryType === 'Expenditure' );
 
     const sumCombined = ( rows ) =>
         rows.reduce( ( s, n ) => s + parseFloat( n.Balance ?? 0 ), 0 );
-
-    const sumAcct = ( rows, k ) =>
-        rows.reduce( ( s, n ) => {
-            const v = acctBalance( data[ k ], n.NominalCode );
-            return s + ( v ?? 0 );
-        }, 0 );
 
     const sumPY = ( rows ) =>
         rows.reduce( ( s, n ) => s + ( priorYear[ n.NominalCode ] ?? 0 ), 0 );
@@ -153,17 +133,7 @@ function SoFATable( { data, priorYear, priorFY, currentFYLabel, priorFYLabel, on
         return (
             <tr key={ code }>
                 <td style={ { color: 'var(--muted)', fontSize: '.8125rem', whiteSpace: 'nowrap' } }>{ code }</td>
-                <td>{ n.NominalName ?? code }</td>
-                { ACCOUNT_KEYS.map( ( k ) => {
-                    const val = acctBalance( data[ k ], code );
-                    return (
-                        <td key={ k } style={ { color: data[ k ]?._error ? 'var(--muted)' : 'inherit' } }>
-                            { val === null
-                                ? <span title={ data[ k ]?._error ?? '' } style={ { color: 'var(--muted)' } }>—</span>
-                                : fmt( val ) }
-                        </td>
-                    );
-                } ) }
+                <td>{ n.NominalName || code }</td>
                 <td style={ { fontWeight: 600 } }>{ fmt( parseFloat( n.Balance ?? 0 ) ) }</td>
                 <PriorYearCell fy={ priorFY } code={ code } value={ pyVal } onSaved={ onPriorYearSaved } />
             </tr>
@@ -176,11 +146,6 @@ function SoFATable( { data, priorYear, priorFY, currentFYLabel, priorFYLabel, on
             <tr style={ { background: 'var(--bg)', borderTop: '2px solid var(--border)' } }>
                 <td />
                 <td style={ { fontWeight: 700 } }>{ label }</td>
-                { ACCOUNT_KEYS.map( ( k ) => (
-                    <td key={ k } style={ { fontWeight: 700 } }>
-                        { data[ k ]?._error ? '—' : fmt( sumAcct( rows, k ) ) }
-                    </td>
-                ) ) }
                 <td style={ { fontWeight: 700, color: 'var(--navy)' } }>{ fmt( sumCombined( rows ) ) }</td>
                 <td style={ { fontWeight: 700 } }>{ fmt( pyTotal ) }</td>
             </tr>
@@ -191,8 +156,6 @@ function SoFATable( { data, priorYear, priorFY, currentFYLabel, priorFYLabel, on
     const totalExpend  = sumCombined( expendRows );
     const netThisYear  = totalIncome - totalExpend;
     const netPriorYear = sumPY( incomeRows ) - sumPY( expendRows );
-
-    const netAcct = ( k ) => sumAcct( incomeRows, k ) - sumAcct( expendRows, k );
 
     const navyRow = ( label ) => (
         <tr style={ { background: 'var(--navy)' } }>
@@ -209,16 +172,6 @@ function SoFATable( { data, priorYear, priorFY, currentFYLabel, priorFYLabel, on
                     <tr>
                         <th style={ { width: 68 } }>{ __( 'Code', 'quickfile-dashboard' ) }</th>
                         <th>{ __( 'Description', 'quickfile-dashboard' ) }</th>
-                        { ACCOUNT_KEYS.map( ( k ) => (
-                            <th key={ k }>
-                                { ACCOUNT_LABELS[ k ] }
-                                { data[ k ]?._error && (
-                                    <span style={ { fontWeight: 400, fontSize: '.7rem', display: 'block', color: 'rgba(255,255,255,.6)' } }>
-                                        { __( '(unavailable)', 'quickfile-dashboard' ) }
-                                    </span>
-                                ) }
-                            </th>
-                        ) ) }
                         <th>
                             { currentFYLabel }
                             <span style={ { display: 'block', fontWeight: 400, fontSize: '.75rem' } }>£</span>
@@ -248,14 +201,6 @@ function SoFATable( { data, priorYear, priorFY, currentFYLabel, priorFYLabel, on
                         <td style={ { fontWeight: 700, color: 'var(--navy)' } }>
                             { __( 'Net Income / (Expenditure)', 'quickfile-dashboard' ) }
                         </td>
-                        { ACCOUNT_KEYS.map( ( k ) => {
-                            const v = netAcct( k );
-                            return (
-                                <td key={ k } style={ { fontWeight: 700, color: data[ k ]?._error ? 'var(--muted)' : ( v >= 0 ? 'var(--rag-green)' : 'var(--rag-red)' ) } }>
-                                    { data[ k ]?._error ? '—' : fmt( v ) }
-                                </td>
-                            );
-                        } ) }
                         <td style={ { fontWeight: 700, color: netThisYear >= 0 ? 'var(--rag-green)' : 'var(--rag-red)' } }>
                             { fmt( netThisYear ) }
                         </td>

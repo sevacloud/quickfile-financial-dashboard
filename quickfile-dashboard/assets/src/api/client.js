@@ -30,7 +30,7 @@ async function apiFetch( path, params = {}, method = 'GET', body = null ) {
 }
 
 export const api = {
-    getBalances:        ( from, to )   => apiFetch( '/balances', from && to ? { from, to } : {} ),
+    getBalances:        ()             => apiFetch( '/balances' ),
     getMonthlySummary:  ( from, to )   => apiFetch( '/monthly-summary', { from, to } ),
     getAnnualStatement: ( from, to )   => apiFetch( '/annual-statement', { from, to } ),
     getProjects:        ( from, to )   => apiFetch( '/projects', { from, to } ),
@@ -38,7 +38,7 @@ export const api = {
     getYearComparison:  ( years )      => apiFetch( '/year-comparison', { years: years.join( ',' ) } ),
     getTransactions:    ( account, from, to ) => apiFetch( '/transactions', { account, from, to } ),
     getProjectBudgets:    ()                        => apiFetch( '/project-budgets' ),
-    saveProjectBudget:    ( tag_id, budget )        => apiFetch( '/project-budgets', {}, 'POST', { tag_id, budget } ),
+    saveProjectBudget:    ( tag, budget )           => apiFetch( '/project-budgets', {}, 'POST', { tag, budget } ),
     getPriorYear:         ( fy )                    => apiFetch( '/prior-year', { fy } ),
     savePriorYearFigure:  ( fy, code, amount )      => apiFetch( '/prior-year', {}, 'POST', { fy, code, amount } ),
     getClosingBalances:   ( fy )                    => apiFetch( '/closing-balances', { fy } ),

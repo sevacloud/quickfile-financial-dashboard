@@ -13,6 +13,43 @@ class QFD_Migrator {
      * Run the migration. Idempotent — returns immediately if already done.
      */
     public static function run(): void {
+        self::migrate_v1();
+        self::migrate_v2_rest_api();
+    }
+
+    /**
+     * QuickFile JSON API (v1.2) → REST API (v2).
+     *
+     * The v2 API authenticates with a single bearer token, so the legacy
+     * account number / application ID / API key are removed, and a saved
+     * legacy endpoint is cleared so the v2 default applies. Cached v1-shaped
+     * responses are flushed. Old qfd_budget_{TagID} options are left untouched;
+     * v2 tags have no ID, so budgets are now stored by name in qfd_project_budgets.
+     */
+    private static function migrate_v2_rest_api(): void {
+        if ( get_option( 'qfd_migrated_v2' ) ) {
+            return;
+        }
+
+        if ( str_contains( (string) get_option( 'qfd_endpoint', '' ), 'api.quickfile.co.uk/1_' ) ) {
+            delete_option( 'qfd_endpoint' );
+        }
+
+        foreach ( [ 'qfd_account_number', 'qfd_application_id', 'qfd_api_key', 'qfd_api_key_enc' ] as $legacy ) {
+            delete_option( $legacy );
+        }
+
+        global $wpdb;
+        $wpdb->query( $wpdb->prepare(
+            "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+            $wpdb->esc_like( '_transient_' . QFD_API::CACHE_PREFIX ) . '%',
+            $wpdb->esc_like( '_transient_timeout_' . QFD_API::CACHE_PREFIX ) . '%'
+        ) );
+
+        update_option( 'qfd_migrated_v2', 1 );
+    }
+
+    private static function migrate_v1(): void {
         if ( get_option( 'qfd_migrated_v1' ) ) {
             return;
         }

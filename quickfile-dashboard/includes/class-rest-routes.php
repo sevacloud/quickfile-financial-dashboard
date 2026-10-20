@@ -106,10 +106,10 @@ class QFD_REST {
                 'callback'            => [ $this, 'save_project_budget' ],
                 'permission_callback' => $auth,
                 'args'                => [
-                    'tag_id' => [
+                    'tag' => [
                         'required'          => true,
-                        'validate_callback' => fn( $v ) => is_numeric( $v ) && (int) $v > 0,
-                        'sanitize_callback' => 'absint',
+                        'validate_callback' => fn( $v ) => is_string( $v ) && trim( $v ) !== '',
+                        'sanitize_callback' => 'sanitize_text_field',
                     ],
                     'budget' => [
                         'required'          => true,
@@ -172,23 +172,9 @@ class QFD_REST {
     // Callbacks
     // -----------------------------------------------------------------
 
-    public function get_balances( WP_REST_Request $req ): WP_REST_Response|WP_Error {
-        $from = $req->get_param( 'from' );
-        $to   = $req->get_param( 'to' );
-
-        if ( ! $from || ! $to ) {
-            $fy_month = max( 1, min( 12, (int) get_option( 'qfd_fy_start_month', 4 ) ) );
-            $now_year  = (int) date( 'Y' );
-            $now_month = (int) date( 'n' );
-            $from = sprintf( '%04d-%02d-01', ( $now_month >= $fy_month ? $now_year : $now_year - 1 ), $fy_month );
-            $to   = date( 'Y-m-d' );
-        }
-
-        $from = sanitize_text_field( $from );
-        $to   = sanitize_text_field( $to );
-
+    public function get_balances(): WP_REST_Response|WP_Error {
         $api     = new QFD_API();
-        $results = $api->get_account_balances( $from, $to );
+        $results = $api->get_account_balances();
 
         if ( is_wp_error( $results ) ) {
             return $results;
@@ -211,13 +197,13 @@ class QFD_REST {
         $api            = new QFD_API();
         $result         = [];
 
-        foreach ( $this->selected_nominal_codes() as $key => $nominal_code ) {
-            $search = $api->search_transactions( $nominal_code, $from, $to );
-            if ( is_wp_error( $search ) ) {
-                $result[ $key ] = [ '_error' => $search->get_error_message() ];
+        foreach ( QFD_API::selected_accounts() as $key => $acc ) {
+            $transactions = $api->search_transactions( $acc['bankId'], $from, $to );
+            if ( is_wp_error( $transactions ) ) {
+                $result[ $key ] = [ '_error' => $transactions->get_error_message() ];
                 continue;
             }
-            $result[ $key ] = $this->aggregate_monthly( $search['transactions'] ?? [] );
+            $result[ $key ] = $this->aggregate_monthly( $transactions );
         }
 
         return new WP_REST_Response( $result );
@@ -227,47 +213,44 @@ class QFD_REST {
         [ $from, $to ] = $this->extract_dates( $req );
         $api            = new QFD_API();
 
-        // Combined (authoritative for nominal codes and names).
-        $combined = $api->get_chart_of_accounts( $from, $to );
+        // The v2 reports have no bank-account filter, so only combined figures are available.
+        $combined = $api->get_profit_and_loss( $from, $to );
         if ( is_wp_error( $combined ) ) {
             return $combined;
         }
 
-        $result = [ 'combined' => $combined ];
-        foreach ( $this->selected_account_ids() as $key => $id ) {
-            $data = $api->get_chart_of_accounts( $from, $to, $id );
-            $result[ $key ] = is_wp_error( $data )
-                ? [ '_error' => $data->get_error_message() ]
-                : $data;
-        }
-
-        return new WP_REST_Response( $result );
+        return new WP_REST_Response( [ 'combined' => $combined ] );
     }
 
     public function get_transactions( WP_REST_Request $req ): WP_REST_Response|WP_Error {
         [ $from, $to ] = $this->extract_dates( $req );
-        $account_key   = $req->get_param( 'account' );
+        $account_key   = (string) $req->get_param( 'account' );
 
-        $codes        = $this->selected_nominal_codes();
-        $nominal_code = $codes[ $account_key ] ?? '';
-
-        if ( $nominal_code === '' ) {
+        $acc = QFD_API::selected_accounts()[ $account_key ] ?? null;
+        if ( $acc === null ) {
             return new WP_Error( 'not_found', 'Account not configured.', [ 'status' => 404 ] );
         }
 
-        $api    = new QFD_API();
-        $search = $api->search_transactions( $nominal_code, $from, $to, 200 );
-
-        if ( is_wp_error( $search ) ) {
-            return $search;
+        $api          = new QFD_API();
+        $transactions = $api->search_transactions( $acc['bankId'], $from, $to );
+        if ( is_wp_error( $transactions ) ) {
+            return $transactions;
         }
 
+        $balance = $api->get_account_balance( $acc['bankId'] );
+
         return new WP_REST_Response( [
-            'meta'         => $search['meta']         ?? [],
-            'transactions' => $search['transactions'] ?? [],
+            'meta'         => [
+                'BankName'       => $acc['name'],
+                'CurrentBalance' => is_wp_error( $balance ) ? null : $balance,
+            ],
+            'transactions' => $transactions,
         ] );
     }
 
+    /**
+     * Income (tagged sales invoices) vs spend (tagged purchases) per project tag.
+     */
     public function get_projects( WP_REST_Request $req ): WP_REST_Response|WP_Error {
         [ $from, $to ] = $this->extract_dates( $req );
         $api            = new QFD_API();
@@ -279,18 +262,25 @@ class QFD_REST {
 
         $result = [];
         foreach ( $tags as $tag ) {
-            $tag_name = $tag['TagName'] ?? '';
-            if ( $tag_name === '' ) {
-                continue;
-            }
-            $invoices = $api->get_invoices_by_tag( $tag_name, $from, $to );
+            $invoices = $api->get_invoices_by_tag( $tag, $from, $to );
             if ( is_wp_error( $invoices ) ) {
                 return $invoices;
             }
+            $purchases = $api->get_purchases_by_tag( $tag, $from, $to );
+            if ( is_wp_error( $purchases ) ) {
+                return $purchases;
+            }
+
+            $income = round( array_sum( array_column( $invoices, 'GrossAmount' ) ), 2 );
+            $spend  = round( array_sum( array_column( $purchases, 'GrossAmount' ) ), 2 );
+
             $result[] = [
-                'tag'      => $tag,
-                'invoices' => $invoices,
-                'total'    => array_sum( array_column( $invoices, 'TotalAmount' ) ),
+                'tag'       => $tag,
+                'invoices'  => $invoices,
+                'purchases' => $purchases,
+                'income'    => $income,
+                'spend'     => $spend,
+                'net'       => round( $income - $spend, 2 ),
             ];
         }
 
@@ -301,6 +291,7 @@ class QFD_REST {
         [ $from, $to ] = $this->extract_dates( $req );
         $api            = new QFD_API();
 
+        // Project tags applied to utility purchase invoices in QuickFile.
         $utility_tags = [
             'Gas', 'Electricity', 'Water',
             'Broadband', 'Insurance', 'Alarm',
@@ -308,11 +299,22 @@ class QFD_REST {
 
         $result = [];
         foreach ( $utility_tags as $tag ) {
-            $invoices = $api->get_invoices_by_tag( $tag, $from, $to );
-            if ( is_wp_error( $invoices ) ) {
-                return $invoices;
+            $purchases = $api->get_purchases_by_tag( $tag, $from, $to );
+            if ( is_wp_error( $purchases ) ) {
+                return $purchases;
             }
-            $result[ $tag ] = $this->aggregate_monthly( $invoices );
+
+            $months = [];
+            foreach ( $purchases as $purchase ) {
+                $month = substr( $purchase['ReceiptDate'], 0, 7 ); // YYYY-MM
+                if ( $month === '' ) {
+                    continue;
+                }
+                $months[ $month ] ??= [ 'income' => 0.0, 'expenditure' => 0.0 ];
+                $months[ $month ]['expenditure'] += $purchase['GrossAmount'];
+            }
+            ksort( $months );
+            $result[ $tag ] = $months;
         }
 
         return new WP_REST_Response( $result );
@@ -331,18 +333,18 @@ class QFD_REST {
             $from     = sprintf( '%04d-%02d-01', $year, $fy_m );
             $to       = sprintf( '%04d-%02d-%02d', $end_year, $end_m, $end_day );
 
-            $coa = $api->get_chart_of_accounts( $from, $to );
-            if ( is_wp_error( $coa ) ) return $coa;
+            $pnl = $api->get_profit_and_loss( $from, $to );
+            if ( is_wp_error( $pnl ) ) return $pnl;
 
             $bs               = $api->get_balance_sheet( $to );
             $account_balances = [];
             if ( ! is_wp_error( $bs ) ) {
-                foreach ( $this->selected_nominal_codes() as $bank_id => $nominal ) {
-                    $account_balances[ (string) $bank_id ] = $bs[ (string) $nominal ] ?? null;
+                foreach ( QFD_API::selected_accounts() as $key => $acc ) {
+                    $account_balances[ $key ] = $bs[ (string) $acc['nominalCode'] ] ?? null;
                 }
             }
 
-            $result[ $year ] = array_merge( $coa, [ '_balances' => $account_balances, '_to' => $to ] );
+            $result[ $year ] = array_merge( $pnl, [ '_balances' => $account_balances, '_to' => $to ] );
         }
 
         return new WP_REST_Response( $result );
@@ -369,28 +371,25 @@ class QFD_REST {
         return new WP_REST_Response( [ 'saved' => true, 'fy' => $fy, 'code' => $code, 'amount' => $amount ] );
     }
 
+    /**
+     * Project budgets, keyed by project tag name (QuickFile v2 tags have no ID).
+     */
     public function get_project_budgets(): WP_REST_Response {
-        global $wpdb;
-        $like = $wpdb->esc_like( 'qfd_budget_' ) . '%';
-        $rows = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s",
-                $like
-            )
-        );
-        $budgets = [];
-        foreach ( $rows as $row ) {
-            $tag_id             = substr( $row->option_name, strlen( 'qfd_budget_' ) );
-            $budgets[ $tag_id ] = (float) $row->option_value;
-        }
-        return new WP_REST_Response( $budgets );
+        return new WP_REST_Response( (object) $this->stored_budgets() );
     }
 
     public function save_project_budget( WP_REST_Request $req ): WP_REST_Response {
-        $tag_id = $req->get_param( 'tag_id' );
-        $budget = $req->get_param( 'budget' );
-        update_option( "qfd_budget_{$tag_id}", $budget, false );
-        return new WP_REST_Response( [ 'saved' => true, 'tag_id' => $tag_id, 'budget' => $budget ] );
+        $tag     = $req->get_param( 'tag' );
+        $budget  = $req->get_param( 'budget' );
+        $budgets = $this->stored_budgets();
+        $budgets[ $tag ] = $budget;
+        update_option( 'qfd_project_budgets', wp_json_encode( $budgets ), false );
+        return new WP_REST_Response( [ 'saved' => true, 'tag' => $tag, 'budget' => $budget ] );
+    }
+
+    private function stored_budgets(): array {
+        $budgets = json_decode( (string) get_option( 'qfd_project_budgets', '{}' ), true );
+        return is_array( $budgets ) ? array_map( 'floatval', $budgets ) : [];
     }
 
     public function flush_cache(): WP_REST_Response {
@@ -421,9 +420,9 @@ class QFD_REST {
         if ( is_wp_error( $bs ) ) return $bs;
 
         $result = [];
-        foreach ( $this->selected_nominal_codes() as $bank_id => $nominal ) {
-            $result[ (string) $bank_id ] = [
-                'balance' => $bs[ (string) $nominal ] ?? null,
+        foreach ( QFD_API::selected_accounts() as $key => $acc ) {
+            $result[ $key ] = [
+                'balance' => $bs[ (string) $acc['nominalCode'] ] ?? null,
                 'as_of'   => $year['to'],
             ];
         }
@@ -437,9 +436,9 @@ class QFD_REST {
         if ( is_wp_error( $bs ) ) return $bs;
 
         $accounts = [];
-        foreach ( $this->selected_nominal_codes() as $bank_id => $nominal ) {
-            $accounts[ (string) $bank_id ] = [
-                'balance' => $bs[ (string) $nominal ] ?? null,
+        foreach ( QFD_API::selected_accounts() as $key => $acc ) {
+            $accounts[ $key ] = [
+                'balance' => $bs[ (string) $acc['nominalCode'] ] ?? null,
             ];
         }
         return new WP_REST_Response( [ 'accounts' => $accounts, 'raw' => $bs ] );
@@ -456,37 +455,6 @@ class QFD_REST {
     // -----------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------
-
-    private function selected_account_ids(): array {
-        $raw  = (string) get_option( 'qfd_selected_accounts', '[]' );
-        $list = json_decode( $raw, true );
-        $ids  = [];
-        if ( is_array( $list ) ) {
-            foreach ( $list as $acc ) {
-                $bank_id = (string) ( $acc['bankId'] ?? '' );
-                if ( $bank_id !== '' ) {
-                    $ids[ $bank_id ] = (int) $acc['bankId'];
-                }
-            }
-        }
-        return $ids;
-    }
-
-    private function selected_nominal_codes(): array {
-        $raw  = (string) get_option( 'qfd_selected_accounts', '[]' );
-        $list = json_decode( $raw, true );
-        $codes = [];
-        if ( is_array( $list ) ) {
-            foreach ( $list as $acc ) {
-                $bank_id = (string) ( $acc['bankId']      ?? '' );
-                $nominal = (string) ( $acc['nominalCode'] ?? '' );
-                if ( $bank_id !== '' && $nominal !== '' ) {
-                    $codes[ $bank_id ] = $nominal;
-                }
-            }
-        }
-        return $codes;
-    }
 
     private function date_range_args_optional(): array {
         $date_validate = fn( $v ) => (bool) preg_match( '/^\d{4}-\d{2}-\d{2}$/', $v );
@@ -511,19 +479,21 @@ class QFD_REST {
         ];
     }
 
-    private function aggregate_monthly( array $items ): array {
+    /**
+     * Bucket bank transactions (signed amounts) into monthly income / expenditure.
+     */
+    private function aggregate_monthly( array $transactions ): array {
         $months = [];
-        foreach ( $items as $item ) {
-            $date  = $item['TransactionDate'] ?? $item['InvoiceDate'] ?? '';
+        foreach ( $transactions as $txn ) {
+            $date = $txn['TransactionDate'] ?? '';
             if ( $date === '' ) {
                 continue;
             }
             $month  = substr( $date, 0, 7 ); // YYYY-MM
-            $amount = (float) ( $item['Amount'] ?? $item['TotalAmount'] ?? 0 );
-            $type   = $item['TransactionType'] ?? ( $amount >= 0 ? 'CREDIT' : 'DEBIT' );
+            $amount = (float) ( $txn['Amount'] ?? 0 );
 
             $months[ $month ] ??= [ 'income' => 0.0, 'expenditure' => 0.0 ];
-            if ( strtoupper( $type ) === 'CREDIT' || $amount > 0 ) {
+            if ( $amount >= 0 ) {
                 $months[ $month ]['income'] += abs( $amount );
             } else {
                 $months[ $month ]['expenditure'] += abs( $amount );

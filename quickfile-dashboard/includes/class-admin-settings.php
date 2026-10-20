@@ -30,8 +30,6 @@ class QFD_Settings {
             'qfd_business_name'      => 'sanitize_text_field',
             'qfd_fy_start_month'     => 'absint',
             'qfd_endpoint'           => 'esc_url_raw',
-            'qfd_account_number'     => 'sanitize_text_field',
-            'qfd_application_id'     => 'sanitize_text_field',
             'qfd_cache_duration'     => 'absint',
             'qfd_selected_accounts'  => [ $this, 'sanitize_selected_accounts' ],
         ];
@@ -40,9 +38,9 @@ class QFD_Settings {
             register_setting( self::OPTION_GROUP, $name, [ 'sanitize_callback' => $sanitize ] );
         }
 
-        // API key handled separately (encrypted).
-        register_setting( self::OPTION_GROUP, 'qfd_api_key', [
-            'sanitize_callback' => [ $this, 'sanitize_api_key' ],
+        // API token handled separately (encrypted).
+        register_setting( self::OPTION_GROUP, 'qfd_api_token', [
+            'sanitize_callback' => [ $this, 'sanitize_api_token' ],
         ] );
 
         // Historical years stored as JSON array.
@@ -51,7 +49,7 @@ class QFD_Settings {
         ] );
 
         add_settings_section( 'qfd_general', __( 'General', 'quickfile-dashboard' ), '__return_false', self::PAGE_SLUG );
-        add_settings_section( 'qfd_api', __( 'QuickFile API Credentials', 'quickfile-dashboard' ), '__return_false', self::PAGE_SLUG );
+        add_settings_section( 'qfd_api', __( 'QuickFile API', 'quickfile-dashboard' ), '__return_false', self::PAGE_SLUG );
         add_settings_section( 'qfd_accounts', '', [ $this, 'render_accounts_section_header' ], self::PAGE_SLUG );
         add_settings_section( 'qfd_cache', __( 'Cache Settings', 'quickfile-dashboard' ), '__return_false', self::PAGE_SLUG );
 
@@ -65,10 +63,8 @@ class QFD_Settings {
             'qfd_general'
         );
 
-        $this->add_field( 'qfd_api', 'qfd_endpoint', __( 'API Base URL', 'quickfile-dashboard' ), 'url', __( 'Base URL only — the method name is appended automatically. Default: https://api.quickfile.co.uk/1_2/', 'quickfile-dashboard' ) );
-        $this->add_field( 'qfd_api', 'qfd_account_number', __( 'QuickFile Account Number', 'quickfile-dashboard' ), 'text' );
-        $this->add_field( 'qfd_api', 'qfd_application_id', __( 'Application ID', 'quickfile-dashboard' ), 'text', __( 'The Application ID from QuickFile Settings → API Management.', 'quickfile-dashboard' ) );
-        $this->add_field( 'qfd_api', 'qfd_api_key', __( 'API Key', 'quickfile-dashboard' ), 'password', __( 'Leave blank to keep current key.', 'quickfile-dashboard' ) );
+        $this->add_field( 'qfd_api', 'qfd_endpoint', __( 'API Base URL', 'quickfile-dashboard' ), 'url', sprintf( __( 'QuickFile REST API base URL. Leave blank for the default: %s', 'quickfile-dashboard' ), QFD_API::DEFAULT_ENDPOINT ) );
+        $this->add_field( 'qfd_api', 'qfd_api_token', __( 'API Token', 'quickfile-dashboard' ), 'password', __( 'Personal token from QuickFile → Account Settings → Third Party Integration → API. Grant read access to Banks, Reports, Invoices, Purchases and Projects. Leave blank to keep the current token.', 'quickfile-dashboard' ) );
 
         add_settings_field(
             'qfd_accounts_picker',
@@ -133,15 +129,14 @@ class QFD_Settings {
     }
 
 
-    public function sanitize_api_key( $value ): string {
-        $trimmed = trim( (string) $value );
-        if ( $trimmed === '' ) {
-            // Keep existing encrypted key.
-            return (string) get_option( 'qfd_api_key_enc', '' );
+    public function sanitize_api_token( $value ): string {
+        // Accept a pasted "Bearer …" value as well as the bare token.
+        $trimmed = trim( preg_replace( '/^Bearer\s+/i', '', trim( (string) $value ) ) );
+        if ( $trimmed !== '' ) {
+            update_option( 'qfd_api_token_enc', QFD_Auth::encrypt_token( $trimmed ) );
         }
-        $encrypted = QFD_Auth::encrypt_api_key( $trimmed );
-        update_option( 'qfd_api_key_enc', $encrypted );
-        return $encrypted;
+        // Only the encrypted copy is kept; never store the plain token.
+        return '';
     }
 
     public function sanitize_selected_accounts( $value ): string {
@@ -326,7 +321,7 @@ class QFD_Settings {
         }
         $auth = new QFD_Auth();
         if ( ! $auth->is_configured() ) {
-            wp_send_json_error( 'API credentials not configured. Save Account Number, Application ID, and API Key first.' );
+            wp_send_json_error( 'API token not configured. Save an API Token first.' );
         }
         $api      = new QFD_API();
         $accounts = $api->get_bank_accounts();
@@ -478,7 +473,7 @@ class QFD_Settings {
 
         $auth = new QFD_Auth();
         if ( ! $auth->is_configured() ) {
-            wp_send_json_error( 'Credentials not fully configured. Fill in all three API fields and save first.' );
+            wp_send_json_error( 'API token not configured. Save an API Token first.' );
         }
 
         $api  = new QFD_API();
@@ -538,9 +533,9 @@ class QFD_Settings {
             <h2><?php esc_html_e( 'API Status', 'quickfile-dashboard' ); ?></h2>
             <p>
                 <?php if ( $api_configured ) : ?>
-                    <span style="color:green;">&#10003; <?php esc_html_e( 'API credentials are configured.', 'quickfile-dashboard' ); ?></span>
+                    <span style="color:green;">&#10003; <?php esc_html_e( 'API token is configured.', 'quickfile-dashboard' ); ?></span>
                 <?php else : ?>
-                    <span style="color:red;">&#10007; <?php esc_html_e( 'API credentials are not configured. Fill in Account Number, Application ID, and API Key above.', 'quickfile-dashboard' ); ?></span>
+                    <span style="color:red;">&#10007; <?php esc_html_e( 'API token is not configured. Enter an API Token above.', 'quickfile-dashboard' ); ?></span>
                 <?php endif; ?>
             </p>
             <?php if ( $api_configured ) : ?>
