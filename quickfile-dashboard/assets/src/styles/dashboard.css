@@ -126,6 +126,41 @@ body.qfd-body {
 
 .wb-topbar__meta { font-size: .8125rem; color: var(--muted); }
 
+/* Period selector — explicit colours so theme/admin form styles can't override. */
+.wb-topbar__fy { display: flex; align-items: center; gap: 10px; }
+
+.wb-topbar .wb-topbar__fy-label {
+    font-size: .8125rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+
+.wb-topbar .wb-topbar__fy-select {
+    appearance: auto;
+    background: var(--white);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font: inherit;
+    font-size: .875rem;
+    min-height: 0;
+    cursor: pointer;
+}
+
+.wb-topbar .wb-topbar__fy-select:focus {
+    outline: 2px solid var(--teal);
+    outline-offset: 1px;
+    border-color: var(--teal);
+}
+
+.wb-topbar .wb-topbar__fy-select option {
+    background: var(--white);
+    color: var(--text);
+}
+
 .wb-content { padding: 32px; flex: 1; }
 
 /* ----- Cards ----- */
